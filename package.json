@@ -1,0 +1,26 @@
+{
+  "name": "pixel-asset-generator",
+  "version": "0.5.0",
+  "description": "A tool that helps game developers generate pixel-art assets and sprites",
+  "main": "src/index.js",
+  "bin": {
+    "pixel-gen": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "cli": "node src/cli.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": ["pixel-art", "sprite", "game-dev", "procedural-generation", "tileset"],
+  "license": "MIT",
+  "dependencies": {
+    "canvas": "^2.11.2",
+    "express": "^4.21.0",
+    "gif-encoder-2": "^1.0.5",
+    "multer": "^1.4.5-lts.1",
+    "pngjs": "^7.0.0",
+    "sharp": "^0.33.0",
+    "simplex-noise": "^4.0.3",
+    "uuid": "^9.0.1"
+  }
+}
