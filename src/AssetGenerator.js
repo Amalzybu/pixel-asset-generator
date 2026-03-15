@@ -147,8 +147,13 @@ class AssetGenerator {
       posterization = 4,
       enableOutlines = true,
       outlineColor = 'black',
+      outlineThickness = 1,
+      saturation = 1.0,
       maxColors = 16,
       smoothing = 1,
+      preBlur = 0.6,
+      medianFilter = true,
+      cleanIsolated = true,
       upscale = 1,
       seed = Date.now(),
     } = params;
@@ -187,6 +192,12 @@ class AssetGenerator {
       if (posterization !== 4) config.posterization = posterization;
       if (maxColors !== 16) config.maxColors = maxColors;
       if (smoothing !== 1) config.smoothing = smoothing;
+      if (saturation !== 1.0) config.saturation = saturation;
+      if (outlineThickness !== 1) config.outlineThickness = outlineThickness;
+      if (palette !== 'AUTO') config.palette = palette;
+      if (preBlur !== 0.6) config.preBlur = preBlur;
+      if (!medianFilter) config.medianFilter = false;
+      if (!cleanIsolated) config.cleanIsolated = false;
 
       // Pixelize the image
       const pixelCanvas = await ImagePixelizer.fromFile(imagePath, config);

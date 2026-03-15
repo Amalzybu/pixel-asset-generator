@@ -1216,3 +1216,4 @@ Found a bug? Have a feature request?
 ---
 
 **Happy generating! 🎨✨**
+node src/cli.js --type photo --image "C:\Users\Amal\Pictures\Untitled.png" --style cartoon --pixelDensity 128 --palette ENDESGA-32 --maxColors 28 --contrast 1.2 --saturation 1.5 --posterize 5 --edges true --outlines true --edgeThreshold 120 --preBlur 1.2 --upscale 5

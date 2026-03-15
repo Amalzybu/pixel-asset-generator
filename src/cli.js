@@ -69,7 +69,12 @@ Photo-to-Pixel Options:
   --contrast     Contrast boost multiplier (1.0-2.0, default: 1.2)
   --posterize    Posterization levels (2-8, default: 4)
   --smooth       Smoothing intensity (0-2, default: 1)
-  --upscale      Upscale factor after pixelization (1-8, default: 1)
+  --upscale          Upscale factor after pixelization (1-8, default: 1)
+  --saturation       Saturation boost, 1.0=none, 2.0=vivid cartoon (default: 1.0)
+  --outlineThickness Outline thickness in pixels (1-3, default: 1)
+  --preBlur          Gaussian blur sigma before downscale (0=off, default: 0.6)
+  --noMedian         Disable median filter (median is on by default)
+  --noClean          Disable isolated pixel removal (on by default)
 
 Examples:
   pixel-gen --type character --width 16 --height 16 --palette pico8 --animations idle,walk
@@ -161,8 +166,13 @@ async function main() {
         posterization: parseInt(args.posterize) || 4,
         enableOutlines: args.outlines !== 'false',
         outlineColor: args.outlineColor || 'black',
+        outlineThickness: parseInt(args.outlineThickness) || 1,
+        saturation: parseFloat(args.saturation) || 1.0,
+        preBlur: args.preBlur !== undefined ? parseFloat(args.preBlur) : 0.6,
+        medianFilter: args.noMedian !== true,
+        cleanIsolated: args.noClean !== true,
         maxColors: parseInt(args.maxColors) || 16,
-        smoothing: parseInt(args.smooth) || 1,
+        smoothing: parseInt(args.smooth) || 0,
         upscale: parseInt(args.upscale) || 1,
       });
       break;
