@@ -140,6 +140,7 @@ class AssetGenerator {
       imagePath,
       pixelDensity = 32,
       palette = 'AUTO',
+      customPalette = null,
       style = 'cartoon', // 'cartoon', 'highRes', 'lowRes', 'minimal'
       enableEdgeDetection = true,
       edgeThreshold = 30,
@@ -200,7 +201,7 @@ class AssetGenerator {
       if (!cleanIsolated) config.cleanIsolated = false;
 
       // Pixelize the image
-      const pixelCanvas = await ImagePixelizer.fromFile(imagePath, config);
+      const pixelCanvas = await ImagePixelizer.fromFile(imagePath, config, customPalette);
 
       // Optionally upscale by creating new canvas with increased scale
       let finalCanvas = pixelCanvas;

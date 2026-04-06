@@ -6,10 +6,43 @@
   "scripts": {
     "gui": "electron .",
     "gui:dev": "electron . --inspect",
-    "cli": "node src/cli.js"
+    "cli": "node src/cli.js",
+    "dist": "electron-builder --win --x64"
   },
-  "keywords": ["pixel-art", "sprite", "game-dev", "procedural-generation", "tileset", "electron"],
+  "keywords": [
+    "pixel-art",
+    "sprite",
+    "game-dev",
+    "procedural-generation",
+    "tileset",
+    "electron"
+  ],
   "license": "MIT",
+  "build": {
+    "appId": "com.pixelgen.app",
+    "productName": "Pixel Asset Generator",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": "portable"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "generate_walk_v3.js",
+      "generate_walk_v2.js",
+      "generate_walk.js",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/.cache/**/*",
+      "!dist/**/*"
+    ],
+    "extraResources": []
+  },
   "dependencies": {
     "canvas": "^2.11.2",
     "gif-encoder-2": "^1.0.5",
@@ -19,6 +52,9 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "electron": "^29.0.0"
+    "@electron/rebuild": "^4.0.3",
+    "electron": "^29.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9"
   }
 }

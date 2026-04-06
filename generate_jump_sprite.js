@@ -1,20 +1,20 @@
 /**
- * generate_walk_v3.js  —  Color-segmented skeletal walk animation
+ * generate_jump_sprite.js  —  Color-segmented skeletal jump animation
  *
- * APPROACH:
+ * APPROACH  (mirrors generate_walk_v3.js):
  *   1. Color clustering → identify body-part pixel groups
  *   2. Connected component labeling → discrete regions
- *   3. Anatomical classification → head / torso / left-arm / right-arm / left-leg / right-leg / feet
+ *   3. Anatomical classification → head / torso / left-arm / right-arm / left-leg / right-leg
  *   4. Joint pivot detection → shoulder, hip, knee pivots
- *   5. Rotation-based animation → rotate limbs around joint pivots per walk-cycle phase
+ *   5. Keyframe-based animation → crouch → push-off → airborne → peak → descent → land
  *
  * Usage:
- *   node generate_walk_v3.js <input.png> [options]
+ *   node generate_jump_sprite.js <input.png> [options]
  *
  * Options:
  *   --frames   Number of frames (default: 8)
  *   --scale    Output upscale   (default: 6)
- *   --stride   Walk intensity 0-1 (default: 0.7)
+ *   --power    Jump intensity 0-1 (default: 0.8)
  *   --output   Output directory   (default: output)
  *   --debug    Export debug visualizations (default: false)
  */
@@ -48,7 +48,7 @@ const args       = parseArgs(process.argv);
 const inputPath  = args.positional[0] || 'output/charcterTest.png';
 const FRAMES     = parseInt(args.frames || '8', 10);
 const SCALE      = parseInt(args.scale  || '6', 10);
-const STRIDE     = parseFloat(args.stride || '0.85');
+const POWER      = parseFloat(args.power || '0.8');
 const OUTPUT_DIR = args.output || 'output';
 const DEBUG      = !!args.debug;
 const ASEPRITE   = !!args.aseprite;
@@ -82,7 +82,6 @@ function colorDist(a, b) {
 // ──────────────────────────────────────────────────────────────────────────────
 
 function kMeansClustering(canvas, k = 6, iterations = 20) {
-  // Collect all opaque pixels with positions
   const pixels = [];
   for (let y = 0; y < canvas.height; y++)
     for (let x = 0; x < canvas.width; x++) {
@@ -92,7 +91,7 @@ function kMeansClustering(canvas, k = 6, iterations = 20) {
 
   if (pixels.length === 0) return { labels: [], centroids: [], pixels };
 
-  // Initialize centroids using k-means++ seeding
+  // k-means++ seeding
   const centroids = [{ r: pixels[0].r, g: pixels[0].g, b: pixels[0].b }];
   for (let c = 1; c < k; c++) {
     const dists = pixels.map(p => {
@@ -110,10 +109,8 @@ function kMeansClustering(canvas, k = 6, iterations = 20) {
     }
   }
 
-  // Iterate
   const labels = new Array(pixels.length).fill(0);
   for (let iter = 0; iter < iterations; iter++) {
-    // Assign each pixel to nearest centroid
     for (let i = 0; i < pixels.length; i++) {
       let bestC = 0, bestD = Infinity;
       for (let c = 0; c < k; c++) {
@@ -122,7 +119,6 @@ function kMeansClustering(canvas, k = 6, iterations = 20) {
       }
       labels[i] = bestC;
     }
-    // Recompute centroids
     const sums = Array.from({ length: k }, () => ({ r: 0, g: 0, b: 0, n: 0 }));
     for (let i = 0; i < pixels.length; i++) {
       const s = sums[labels[i]];
@@ -146,15 +142,13 @@ function kMeansClustering(canvas, k = 6, iterations = 20) {
 
 function connectedComponents(canvas, clusterLabels, pixels) {
   const w = canvas.width, h = canvas.height;
-  // Build cluster grid
   const grid = Array.from({ length: h }, () => new Int16Array(w).fill(-1));
   for (let i = 0; i < pixels.length; i++) {
     grid[pixels[i].y][pixels[i].x] = clusterLabels[i];
   }
 
-  // Flood-fill based CC labeling
   const ccGrid = Array.from({ length: h }, () => new Int16Array(w).fill(-1));
-  const components = []; // { id, cluster, pixels: [{x,y}], minX, maxX, minY, maxY, centroidX, centroidY }
+  const components = [];
   let ccId = 0;
 
   const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
@@ -181,7 +175,6 @@ function connectedComponents(canvas, clusterLabels, pixels) {
         }
       }
 
-      // Compute region stats
       let minX = w, maxX = 0, minY = h, maxY = 0, sumX = 0, sumY = 0;
       for (const p of ccPixels) {
         if (p.x < minX) minX = p.x;
@@ -192,10 +185,7 @@ function connectedComponents(canvas, clusterLabels, pixels) {
       }
 
       components.push({
-        id: ccId,
-        cluster,
-        pixels: ccPixels,
-        area: ccPixels.length,
+        id: ccId, cluster, pixels: ccPixels, area: ccPixels.length,
         minX, maxX, minY, maxY,
         centroidX: sumX / ccPixels.length,
         centroidY: sumY / ccPixels.length,
@@ -219,7 +209,6 @@ const BODY_PARTS = {
   RIGHT_ARM: 'right_arm',
   LEFT_LEG: 'left_leg',
   RIGHT_LEG: 'right_leg',
-  FEET: 'feet',
   OUTLINE: 'outline',
   OTHER: 'other',
 };
@@ -229,34 +218,21 @@ function classifyBodyParts(components, centroids, bodyBBox) {
   const bodyH = maxY - minY + 1;
   const bodyCenterX = (minX + maxX) / 2;
 
-  // Classify centroids first by color properties
   const centroidTypes = centroids.map(c => {
     const brightness = (c.r + c.g + c.b) / 3;
-    const isBlack = brightness < 25;
-    const isSkinTone = c.r > 150 && c.g > 100 && c.b > 60 && c.r > c.g && c.g > c.b;
-    const isDark = brightness < 60;
-    return { isBlack, isSkinTone, isDark, brightness };
+    return { isBlack: brightness < 25, isDark: brightness < 60, brightness };
   });
 
-  // Merge small components into nearest large one
-  // Sort by area descending
-  const sorted = [...components].sort((a, b) => b.area - a.area);
-
-  // Assign body parts based on position + color analysis
-  const bodyParts = new Map(); // partName → [component ids]
+  const bodyParts = new Map();
   for (const name of Object.values(BODY_PARTS)) bodyParts.set(name, []);
 
-  // Find the vertical splits
-  const headEndY = minY + Math.round(bodyH * 0.2);   // top 20% = head
-  const torsoEndY = minY + Math.round(bodyH * 0.55);  // 20-55% = torso
-  const legSplitY = minY + Math.round(bodyH * 0.6);   // where legs clearly separate
+  const headEndY    = minY + Math.round(bodyH * 0.2);
+  const torsoEndY   = minY + Math.round(bodyH * 0.55);
 
-  // Determine left/right leg boundary: find X where gap appears in lower body
+  // Find leg center X (gap between legs)
   let legCenterX = bodyCenterX;
-
-  // Look for the gap column in the leg region
   const gapSearchStartY = Math.round(minY + bodyH * 0.65);
-  const gapSearchEndY = Math.round(minY + bodyH * 0.9);
+  const gapSearchEndY   = Math.round(minY + bodyH * 0.9);
   const colCounts = {};
   for (const comp of components) {
     for (const p of comp.pixels) {
@@ -265,7 +241,6 @@ function classifyBodyParts(components, centroids, bodyBBox) {
       }
     }
   }
-  // Find column with minimum pixel count in the legs region
   let gapCol = Math.round(bodyCenterX), minCount = Infinity;
   for (let x = Math.round(bodyCenterX - 3); x <= Math.round(bodyCenterX + 3); x++) {
     const cnt = colCounts[x] || 0;
@@ -273,28 +248,21 @@ function classifyBodyParts(components, centroids, bodyBBox) {
   }
   legCenterX = gapCol;
 
-  // Classify each component
   for (const comp of components) {
     const ct = centroidTypes[comp.cluster];
-    const relY = (comp.centroidY - minY) / bodyH; // 0=top, 1=bottom
-    const relX = comp.centroidX - bodyCenterX;     // negative=left, positive=right
+    const relY = (comp.centroidY - minY) / bodyH;
+    const relX = comp.centroidX - bodyCenterX;
 
-    // Black outline pixels → outline
     if (ct.isBlack && comp.area > 10) {
       bodyParts.get(BODY_PARTS.OUTLINE).push(comp.id);
       comp.part = BODY_PARTS.OUTLINE;
       continue;
     }
 
-    // Tiny components (1-2 pixels) → classify by position
-    // Head region (top 20%)
     if (relY < 0.2) {
       bodyParts.get(BODY_PARTS.HEAD).push(comp.id);
       comp.part = BODY_PARTS.HEAD;
-    }
-    // Torso region (20-55%)
-    else if (relY < 0.55) {
-      // Check if it's on the far left/right (arm)
+    } else if (relY < 0.55) {
       if (relX < -3) {
         bodyParts.get(BODY_PARTS.LEFT_ARM).push(comp.id);
         comp.part = BODY_PARTS.LEFT_ARM;
@@ -305,9 +273,7 @@ function classifyBodyParts(components, centroids, bodyBBox) {
         bodyParts.get(BODY_PARTS.TORSO).push(comp.id);
         comp.part = BODY_PARTS.TORSO;
       }
-    }
-    // Leg region (55-90%)
-    else if (relY < 0.92) {
+    } else if (relY < 0.92) {
       if (comp.centroidX < legCenterX) {
         bodyParts.get(BODY_PARTS.LEFT_LEG).push(comp.id);
         comp.part = BODY_PARTS.LEFT_LEG;
@@ -315,10 +281,8 @@ function classifyBodyParts(components, centroids, bodyBBox) {
         bodyParts.get(BODY_PARTS.RIGHT_LEG).push(comp.id);
         comp.part = BODY_PARTS.RIGHT_LEG;
       }
-    }
-    // Feet (bottom 10%): merge into the nearest leg based on X — shoes must
-    // rotate rigidly with their leg segment rather than being moved separately.
-    else {
+    } else {
+      // Feet → merge into their leg
       if (comp.centroidX < legCenterX) {
         bodyParts.get(BODY_PARTS.LEFT_LEG).push(comp.id);
         comp.part = BODY_PARTS.LEFT_LEG;
@@ -329,51 +293,34 @@ function classifyBodyParts(components, centroids, bodyBBox) {
     }
   }
 
-  return {
-    bodyParts,
-    headEndY,
-    torsoEndY,
-    legSplitY,
-    legCenterX,
-    bodyCenterX,
-  };
+  return { bodyParts, headEndY, torsoEndY, legCenterX, bodyCenterX };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Build body part pixel masks
-// Now we combine component analysis + position-based fallback for outlines
 // ──────────────────────────────────────────────────────────────────────────────
 
 function buildPartMasks(canvas, components, classification) {
   const w = canvas.width, h = canvas.height;
   const { headEndY, torsoEndY, legCenterX, bodyCenterX } = classification;
 
-  // Get body bounding box
   let minY = h, maxY = 0;
   for (const comp of components) {
     if (comp.minY < minY) minY = comp.minY;
     if (comp.maxY > maxY) maxY = comp.maxY;
   }
   const bodyH = maxY - minY + 1;
-  const feetStartY = minY + Math.round(bodyH * 0.92);
 
-  // ── SMALL COMPONENT FILTER ──────────────────────────────────────────────────
-  // Components with very few pixels are noise/dithering artifacts.
-  // Re-assign them purely by position rather than by their cluster classification.
-  // This prevents tiny isolated islands from scattering when their part is rotated.
   const MIN_COMPONENT_AREA = Math.max(4, Math.round(canvas.width * canvas.height * 0.0008));
   for (const comp of components) {
     if (comp.area < MIN_COMPONENT_AREA && comp.part !== BODY_PARTS.OUTLINE) {
-      // Override with position-based assignment
       const relY = (comp.centroidY - minY) / bodyH;
       if (relY < 0.2) comp.part = BODY_PARTS.HEAD;
       else if (relY < 0.55) comp.part = BODY_PARTS.TORSO;
-      else if (relY < 0.92) comp.part = comp.centroidX < legCenterX ? BODY_PARTS.LEFT_LEG : BODY_PARTS.RIGHT_LEG;
       else comp.part = comp.centroidX < legCenterX ? BODY_PARTS.LEFT_LEG : BODY_PARTS.RIGHT_LEG;
     }
   }
 
-  // Create a part-assignment grid based on components
   const partGrid = Array.from({ length: h }, () => new Array(w).fill(null));
   for (const comp of components) {
     for (const p of comp.pixels) {
@@ -383,47 +330,30 @@ function buildPartMasks(canvas, components, classification) {
     }
   }
 
-  // For outline pixels, assign to nearest non-outline body part by proximity
+  // Assign outline pixels by position
   const outlinePixels = [];
   for (const comp of components) {
     if (comp.part === BODY_PARTS.OUTLINE) {
-      for (const p of comp.pixels) {
-        outlinePixels.push(p);
-      }
+      for (const p of comp.pixels) outlinePixels.push(p);
     }
   }
-
-  // Assign outline pixels by position
   for (const p of outlinePixels) {
     const relY = (p.y - minY) / bodyH;
     if (relY < 0.2) {
       partGrid[p.y][p.x] = BODY_PARTS.HEAD;
     } else if (relY < 0.55) {
       partGrid[p.y][p.x] = BODY_PARTS.TORSO;
-    } else if (relY < 0.92) {
-      if (p.x < legCenterX) {
-        partGrid[p.y][p.x] = BODY_PARTS.LEFT_LEG;
-      } else {
-        partGrid[p.y][p.x] = BODY_PARTS.RIGHT_LEG;
-      }
     } else {
-      if (p.x < legCenterX) {
-        partGrid[p.y][p.x] = BODY_PARTS.LEFT_LEG; // feet outlines go with legs
-      } else {
-        partGrid[p.y][p.x] = BODY_PARTS.RIGHT_LEG;
-      }
+      partGrid[p.y][p.x] = p.x < legCenterX ? BODY_PARTS.LEFT_LEG : BODY_PARTS.RIGHT_LEG;
     }
   }
 
-  // Extract each part as a PixelCanvas with pixels at original positions
   const parts = {};
   for (const partName of Object.values(BODY_PARTS)) {
     if (partName === BODY_PARTS.OUTLINE || partName === BODY_PARTS.OTHER) continue;
     parts[partName] = {
       canvas: new PixelCanvas(w, h, 1),
-      pixels: [],
-      minX: w, maxX: 0, minY: h, maxY: 0,
-      sumX: 0, sumY: 0,
+      pixels: [], minX: w, maxX: 0, minY: h, maxY: 0, sumX: 0, sumY: 0,
     };
   }
 
@@ -444,7 +374,6 @@ function buildPartMasks(canvas, components, classification) {
     }
   }
 
-  // Compute centroids
   for (const part of Object.values(parts)) {
     if (part.pixels.length > 0) {
       part.centroidX = part.sumX / part.pixels.length;
@@ -462,68 +391,32 @@ function buildPartMasks(canvas, components, classification) {
 function detectJoints(parts) {
   const joints = {};
 
-  // Neck joint: bottom-center of head
   const head = parts[BODY_PARTS.HEAD];
   if (head && head.pixels.length > 0) {
-    joints.neck = {
-      x: Math.round(head.centroidX),
-      y: head.maxY,
-    };
+    joints.neck = { x: Math.round(head.centroidX), y: head.maxY };
   }
 
-  // Left hip: top-center of left leg
   const ll = parts[BODY_PARTS.LEFT_LEG];
   if (ll && ll.pixels.length > 0) {
-    joints.leftHip = {
-      x: Math.round(ll.centroidX),
-      y: ll.minY,
-    };
-    // Left knee: midpoint of left leg
-    joints.leftKnee = {
-      x: Math.round(ll.centroidX),
-      y: Math.round((ll.minY + ll.maxY) / 2),
-    };
-    joints.leftAnkle = {
-      x: Math.round(ll.centroidX),
-      y: ll.maxY,
-    };
+    joints.leftHip   = { x: Math.round(ll.centroidX), y: ll.minY };
+    joints.leftKnee  = { x: Math.round(ll.centroidX), y: Math.round((ll.minY + ll.maxY) / 2) };
+    joints.leftAnkle = { x: Math.round(ll.centroidX), y: ll.maxY };
   }
 
-  // Right hip: top-center of right leg
   const rl = parts[BODY_PARTS.RIGHT_LEG];
   if (rl && rl.pixels.length > 0) {
-    joints.rightHip = {
-      x: Math.round(rl.centroidX),
-      y: rl.minY,
-    };
-    joints.rightKnee = {
-      x: Math.round(rl.centroidX),
-      y: Math.round((rl.minY + rl.maxY) / 2),
-    };
-    joints.rightAnkle = {
-      x: Math.round(rl.centroidX),
-      y: rl.maxY,
-    };
+    joints.rightHip   = { x: Math.round(rl.centroidX), y: rl.minY };
+    joints.rightKnee  = { x: Math.round(rl.centroidX), y: Math.round((rl.minY + rl.maxY) / 2) };
+    joints.rightAnkle = { x: Math.round(rl.centroidX), y: rl.maxY };
   }
 
-  // Torso center (for sway)
   const torso = parts[BODY_PARTS.TORSO];
   if (torso && torso.pixels.length > 0) {
-    joints.torsoCenter = {
-      x: Math.round(torso.centroidX),
-      y: Math.round(torso.centroidY),
-    };
-    joints.hipCenter = {
-      x: Math.round(torso.centroidX),
-      y: torso.maxY,
-    };
-    joints.shoulderCenter = {
-      x: Math.round(torso.centroidX),
-      y: torso.minY,
-    };
+    joints.torsoCenter    = { x: Math.round(torso.centroidX), y: Math.round(torso.centroidY) };
+    joints.hipCenter      = { x: Math.round(torso.centroidX), y: torso.maxY };
+    joints.shoulderCenter = { x: Math.round(torso.centroidX), y: torso.minY };
   }
 
-  // Shoulder pivots: top of each arm region (or fallback to torso top)
   const la = parts[BODY_PARTS.LEFT_ARM];
   if (la && la.pixels.length > 0) {
     joints.leftShoulder = { x: Math.round(la.centroidX), y: la.minY };
@@ -541,18 +434,16 @@ function detectJoints(parts) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Rotation of pixel region around a pivot point
-// Uses inverse-mapping (sample source for each output pixel) to avoid gaps
+// Rotation of pixel region around a pivot point (inverse-mapping)
 // ──────────────────────────────────────────────────────────────────────────────
 
 function rotatePartAroundPivot(partCanvas, pivotX, pivotY, angleDeg, translateDX = 0, translateDY = 0) {
   const out = new PixelCanvas(partCanvas.width, partCanvas.height, 1);
-  const rad = -angleDeg * Math.PI / 180; // negative for inverse mapping
+  const rad = -angleDeg * Math.PI / 180;
   const cosA = Math.cos(rad), sinA = Math.sin(rad);
 
   for (let y = 0; y < partCanvas.height; y++) {
     for (let x = 0; x < partCanvas.width; x++) {
-      // Inverse transform: where in source does this output pixel come from?
       const dx = x - translateDX - pivotX;
       const dy = y - translateDY - pivotY;
       const srcX = Math.round(dx * cosA - dy * sinA + pivotX);
@@ -568,8 +459,7 @@ function rotatePartAroundPivot(partCanvas, pivotX, pivotY, angleDeg, translateDX
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// deSpeckle: remove isolated pixels (no opaque 4-connected neighbor).
-// These are inverse-mapping artifacts — single pixels with no adjacent fill.
+// deSpeckle: remove isolated pixels (no opaque 4-connected neighbor)
 // ──────────────────────────────────────────────────────────────────────────────
 
 function deSpeckle(canvas) {
@@ -579,82 +469,15 @@ function deSpeckle(canvas) {
     for (let x = 0; x < w; x++) {
       const p = canvas.getPixel(x, y);
       if (p.a === 0) continue;
-      // Check 4-connected neighbors
       const hasNeighbor =
-        (x > 0     && canvas.getPixel(x-1, y).a > 0) ||
-        (x < w-1   && canvas.getPixel(x+1, y).a > 0) ||
-        (y > 0     && canvas.getPixel(x, y-1).a > 0) ||
-        (y < h-1   && canvas.getPixel(x, y+1).a > 0);
+        (x > 0   && canvas.getPixel(x-1, y).a > 0) ||
+        (x < w-1 && canvas.getPixel(x+1, y).a > 0) ||
+        (y > 0   && canvas.getPixel(x, y-1).a > 0) ||
+        (y < h-1 && canvas.getPixel(x, y+1).a > 0);
       if (hasNeighbor) out.setPixel(x, y, p.r, p.g, p.b, p.a);
     }
   }
   return out;
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Walk cycle keyframe angles (biomechanically-inspired)
-//   t ∈ [0, 1) → one full walk cycle
-//   Returns rotation angles (degrees) + translation for each body part
-// ──────────────────────────────────────────────────────────────────────────────
-
-function walkCycleKeyframes(t, stride) {
-  const tau = Math.PI * 2;
-  const s = stride;
-
-  // Reference pixel-art walk cycle:
-  //   - Very wide hip swing (~38°) for dramatically separated legs like references
-  //   - Deep knee bend (~32°) only during the FORWARD swing (swing leg bends, stance leg straight)
-  //   - POSITIVE knee angle: calf swings back toward vertical = natural human bend
-  //   - High foot lift (5×s) so foot clearly clears the ground
-  //   - Noticeable body bob (rises at mid-stride when stance leg is fully extended)
-  //   - Slight constant forward lean (character leans into the walk, pixel-art style)
-  //   - Dynamic torso rock adds life to the upper body
-  const hipAngle  = 38 * s;   // wide stride like pixel art references
-  const kneeAngle = 32 * s;   // deep, visible knee bend on swing leg
-
-  const sinT = Math.sin(t * tau);
-
-  // legA = left leg.  Swings FORWARD when sinT < 0.
-  const legA_hip   =  sinT * hipAngle;
-  const legA_knee  = +Math.max(0, -sinT) * kneeAngle; // bends only during forward swing
-  const legA_lift  =  Math.max(0, -sinT) * 5 * s;     // high foot clearance
-
-  // legB = right leg. Swings FORWARD when sinT > 0.
-  const legB_hip   = -sinT * hipAngle;
-  const legB_knee  = +Math.max(0,  sinT) * kneeAngle;
-  const legB_lift  =  Math.max(0,  sinT) * 5 * s;
-
-  // Body rises UP at mid-stride, dips slightly at heel-strike.
-  // Coefficient 2.0 keeps bounce visible but not so large it breaks the upper body.
-  const bodyBounce = -(Math.abs(sinT) - 0.3) * 2.0 * s;
-
-  // No lateral sway.
-  const hipSway = 0;
-
-  // Torso: NO static rotation lean (avoids pixel gaps on small sprites from inverse-mapping).
-  // Only a very tiny dynamic rock is applied — upper body moves as ONE translated unit.
-  const torsoLean = sinT * 1.0 * s;
-
-  // Head matches torso exactly (both move as one unit in buildFrame — headTilt unused there).
-  const headTilt = 0;
-
-  // Arm swing as rotation angle around shoulder pivot (degrees).
-  // Right arm swings forward when left leg is forward (sinT < 0), and vice-versa.
-  // rightArm forward = negative rotation (counterclockwise for left-facing character = forward).
-  const armSwingAngle = sinT * 18 * s;  // reduced from 28 to avoid stray pixel scatter
-  // Also keep vertical translation component for any residual arm pixels.
-  const armSwing = sinT * 5 * s;
-
-  return {
-    leftLeg: { hipAngle: legA_hip, kneeAngle: legA_knee, lift: legA_lift },
-    rightLeg: { hipAngle: legB_hip, kneeAngle: legB_knee, lift: legB_lift },
-    bodyBounce,
-    torsoLean,
-    headTilt,
-    armSwing,
-    armSwingAngle,
-    hipSway,
-  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -688,11 +511,180 @@ function composite(dst, src) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Rotate leg segments: upper leg around hip, lower leg around knee
-// For pixel art, we split the leg into upper/lower at the knee joint
+// Jump cycle keyframes  (inspired by Mega Man X / platformer jump arcs)
+//
+//   t ∈ [0, 1) → one full jump cycle
+//   Phase breakdown (8 frames):
+//     0.000 – 0.125  Idle / ready           (frame 0)
+//     0.125 – 0.250  Anticipation crouch    (frame 1)  — deep squat, arms back
+//     0.250 – 0.375  Push-off / launch      (frame 2)  — legs extend, arms swing up
+//     0.375 – 0.500  Rising / ascent        (frame 3)  — body upright, legs trail
+//     0.500 – 0.625  Peak / apex            (frame 4)  — full extension
+//     0.625 – 0.750  Descent                (frame 5)  — legs reach down
+//     0.750 – 0.875  Landing impact         (frame 6)  — deep absorption squat
+//     0.875 – 1.000  Recovery               (frame 7)  — return to idle
+//
+//   IMPORTANT: bodyLift is applied as a WHOLE-FRAME translate in buildFrame,
+//   NOT passed to individual part rotations. This prevents part-drift.
 // ──────────────────────────────────────────────────────────────────────────────
 
-function animateLeg(legPart, hipJoint, kneeJoint, hipAngle, kneeAngle, liftDY, bodyDY) {
+function jumpCycleKeyframes(t, power, bodyH) {
+  const p = power;
+
+  function phaseT(start, end) {
+    if (t < start) return 0;
+    if (t >= end) return 1;
+    return (t - start) / (end - start);
+  }
+
+  function easeInOut(v) { return v * v * (3 - 2 * v); }
+  function easeOut(v)   { return 1 - (1 - v) * (1 - v); }
+  function easeIn(v)    { return v * v; }
+
+  // ── Vertical translation (whole-frame lift) ───────────────────────────
+  // Scale jump height relative to body height so small/large sprites both work.
+  // Positive = down (crouch dip), negative = up (airborne).
+  const jumpHeight = Math.round(bodyH * 0.35 * p);  // peak ~35% of body height
+  const crouchDip  = Math.round(Math.max(3, bodyH * 0.10 * p));
+  let bodyLift = 0;
+
+  if (t < 0.125) {
+    bodyLift = 0;
+  } else if (t < 0.25) {
+    // Crouch dip — deeper squat
+    const ct = easeInOut(phaseT(0.125, 0.25));
+    bodyLift = ct * crouchDip;
+  } else if (t < 0.375) {
+    // Push-off: rise from crouch through neutral into air
+    const ct = easeIn(phaseT(0.25, 0.375));
+    bodyLift = (1 - ct) * crouchDip - ct * jumpHeight * 0.5;
+  } else if (t < 0.625) {
+    // Airborne parabola  (peak at t=0.5)
+    const mid = (t - 0.375) / (0.625 - 0.375); // 0→1
+    bodyLift = -(4 * mid * (1 - mid)) * jumpHeight;
+  } else if (t < 0.75) {
+    // Descent → approaching ground
+    const ct = easeIn(phaseT(0.625, 0.75));
+    bodyLift = -(1 - ct) * jumpHeight * 0.25;
+  } else if (t < 0.875) {
+    // Landing: slight dip
+    const ct = easeOut(phaseT(0.75, 0.875));
+    bodyLift = ct * crouchDip;
+  } else {
+    // Recovery
+    const ct = easeInOut(phaseT(0.875, 1.0));
+    bodyLift = (1 - ct) * crouchDip;
+  }
+
+  // ── Leg pose ──────────────────────────────────────────────────────────
+  // Visible knee-tuck is the key "action" pose for a jump sprite.
+  // Crouch: deep squat.  Airborne: knees pulled up high.  Landing: absorb.
+  let kneeBend = 0;
+  let hipBend  = 0;
+
+  if (t < 0.125) {
+    kneeBend = 0; hipBend = 0;
+  } else if (t < 0.25) {
+    // Anticipation crouch — deep squat, knees visibly bent
+    const ct = easeInOut(phaseT(0.125, 0.25));
+    kneeBend = ct * 30 * p;
+    hipBend  = ct * 12 * p;
+  } else if (t < 0.375) {
+    // Push-off — legs straighten explosively
+    const ct = easeIn(phaseT(0.25, 0.375));
+    kneeBend = (1 - ct) * 30 * p;
+    hipBend  = (1 - ct) * 12 * p - ct * 5 * p;
+  } else if (t < 0.5) {
+    // Ascending — knees tuck UP hard (the signature jump pose)
+    const ct = easeOut(phaseT(0.375, 0.5));
+    kneeBend = ct * 35 * p;            // strong knee tuck
+    hipBend  = -5 * p + ct * (-10) * p; // hips rotate legs backward/up
+  } else if (t < 0.625) {
+    // Peak — hold the tuck, legs bent underneath body
+    const ct = easeInOut(phaseT(0.5, 0.625));
+    kneeBend = 35 * p - ct * 10 * p;   // slight release from max tuck
+    hipBend  = -15 * p + ct * 8 * p;   // start extending
+  } else if (t < 0.75) {
+    // Descent — legs extend downward to prepare for landing
+    const ct = easeIn(phaseT(0.625, 0.75));
+    kneeBend = 25 * p * (1 - ct);      // straighten out
+    hipBend  = -7 * p + ct * 12 * p;   // legs swing forward/down
+  } else if (t < 0.875) {
+    // Landing impact — deep absorption bend, visibly crouched
+    const ct = easeOut(phaseT(0.75, 0.875));
+    kneeBend = ct * 32 * p;
+    hipBend  = 5 * p + ct * 8 * p;
+  } else {
+    // Recovery — return to standing
+    const ct = easeInOut(phaseT(0.875, 1.0));
+    kneeBend = (1 - ct) * 32 * p;
+    hipBend  = (1 - ct) * 13 * p;
+  }
+
+  // ── Arm swing ─────────────────────────────────────────────────────────
+  // Negative = arms swing upward/backward.  Keep moderate for pixel art.
+  let armRaise = 0;
+
+  if (t < 0.125) {
+    armRaise = 0;
+  } else if (t < 0.25) {
+    // Crouch: arms pull back
+    const ct = easeInOut(phaseT(0.125, 0.25));
+    armRaise = ct * 8 * p;
+  } else if (t < 0.375) {
+    // Push-off: arms swing up forcefully
+    const ct = easeIn(phaseT(0.25, 0.375));
+    armRaise = 8 * p - ct * 28 * p;
+  } else if (t < 0.625) {
+    // Airborne: arms held up, slight relax at peak
+    const ct = easeInOut(phaseT(0.375, 0.625));
+    armRaise = -20 * p + ct * 5 * p;
+  } else if (t < 0.75) {
+    // Descent: arms come down
+    const ct = easeIn(phaseT(0.625, 0.75));
+    armRaise = -15 * p + ct * 15 * p;
+  } else if (t < 0.875) {
+    // Landing: arms forward for balance
+    const ct = easeOut(phaseT(0.75, 0.875));
+    armRaise = ct * 6 * p;
+  } else {
+    const ct = easeInOut(phaseT(0.875, 1.0));
+    armRaise = (1 - ct) * 6 * p;
+  }
+
+  // ── Torso lean ─────────────────────────────────────────────────────────
+  // Slightly increased to complement the deeper knee bends.
+  let torsoLean = 0;
+
+  if (t < 0.125) {
+    torsoLean = 0;
+  } else if (t < 0.25) {
+    const ct = easeInOut(phaseT(0.125, 0.25));
+    torsoLean = ct * 5 * p;            // lean forward in deep crouch
+  } else if (t < 0.375) {
+    const ct = easeIn(phaseT(0.25, 0.375));
+    torsoLean = (1 - ct) * 5 * p;      // straighten during launch
+  } else if (t < 0.625) {
+    torsoLean = -2 * p;                // slight backward arch in air
+  } else if (t < 0.75) {
+    const ct = easeIn(phaseT(0.625, 0.75));
+    torsoLean = -2 * p + ct * 4 * p;   // tilt forward for landing
+  } else if (t < 0.875) {
+    const ct = easeOut(phaseT(0.75, 0.875));
+    torsoLean = 2 * p + ct * 4 * p;    // deep forward lean on impact
+  } else {
+    const ct = easeInOut(phaseT(0.875, 1.0));
+    torsoLean = (1 - ct) * 6 * p;
+  }
+
+  return { bodyLift, kneeBend, hipBend, armRaise, torsoLean };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Animate leg pair for jump (both legs move together)
+// ──────────────────────────────────────────────────────────────────────────────
+
+function animateJumpLeg(legPart, hipJoint, kneeJoint, hipAngle, kneeAngle) {
   if (!legPart || legPart.pixels.length === 0) {
     return new PixelCanvas(legPart ? legPart.canvas.width : 50, legPart ? legPart.canvas.height : 50, 1);
   }
@@ -714,142 +706,116 @@ function animateLeg(legPart, hipJoint, kneeJoint, hipAngle, kneeAngle, liftDY, b
     }
   }
 
-  // Rotate upper leg around hip, then clean stray pixels
-  const upperRotated = deSpeckle(rotatePartAroundPivot(upperLeg, hipJoint.x, hipJoint.y, hipAngle, 0, bodyDY));
+  // Rotate upper leg around hip (NO bodyDY — lift applied to whole frame later)
+  const upperRotated = deSpeckle(rotatePartAroundPivot(upperLeg, hipJoint.x, hipJoint.y, hipAngle));
 
-  // For the lower leg, first rotate with hip (it moves with upper leg),
-  // then apply knee bend.
-  // Compute where the knee ends up after hip rotation
+  // Compute new knee position after hip rotation
   const hipRad = hipAngle * Math.PI / 180;
-  const kneeNewX = hipJoint.x + Math.cos(hipRad) * (kneeJoint.x - hipJoint.x) - Math.sin(hipRad) * (kneeJoint.y - hipJoint.y);
-  const kneeNewY = hipJoint.y + Math.sin(hipRad) * (kneeJoint.x - hipJoint.x) + Math.cos(hipRad) * (kneeJoint.y - hipJoint.y) + bodyDY;
+  const kneeNewX = hipJoint.x + Math.cos(hipRad) * (kneeJoint.x - hipJoint.x)
+                              - Math.sin(hipRad) * (kneeJoint.y - hipJoint.y);
+  const kneeNewY = hipJoint.y + Math.sin(hipRad) * (kneeJoint.x - hipJoint.x)
+                              + Math.cos(hipRad) * (kneeJoint.y - hipJoint.y);
 
-  // Rotate lower leg around original knee first (with hip)
-  const lowerWithHip = rotatePartAroundPivot(lowerLeg, hipJoint.x, hipJoint.y, hipAngle, 0, bodyDY);
-  // Then apply knee bend around the new knee position, clean stray pixels
-  const lowerFinal = deSpeckle(rotatePartAroundPivot(lowerWithHip, Math.round(kneeNewX), Math.round(kneeNewY), kneeAngle));
+  // Rotate lower leg: first with hip, then apply knee bend
+  const lowerWithHip = rotatePartAroundPivot(lowerLeg, hipJoint.x, hipJoint.y, hipAngle);
+  const lowerFinal   = deSpeckle(rotatePartAroundPivot(lowerWithHip, Math.round(kneeNewX), Math.round(kneeNewY), kneeAngle));
 
-  // Apply lift (foot clearance during swing phase)
-  const liftedLower = translatePart(lowerFinal, 0, -liftDY);
-
-  // Composite upper + lower
   const result = new PixelCanvas(w, h, 1);
   composite(result, upperRotated);
-  composite(result, liftedLower);
+  composite(result, lowerFinal);
 
   return result;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Build one complete animation frame
+// Build one complete jump animation frame
 // ──────────────────────────────────────────────────────────────────────────────
 
-function buildFrame(base, parts, joints, t, stride) {
-  const kf = walkCycleKeyframes(t, stride);
+function buildFrame(base, parts, joints, t, power, bodyH) {
+  const kf = jumpCycleKeyframes(t, power, bodyH);
   const w = base.width, h = base.height;
-  const frame = new PixelCanvas(w, h, 1);
 
-  // The leg SWINGING FORWARD (negative hip angle = toward viewer) draws on top.
-  // legA (left leg) swings forward when hipAngle < 0 → leftInFront = true.
-  const leftInFront = kf.leftLeg.hipAngle < 0;
+  // 1) Compose the POSE at neutral position (no vertical lift yet)
+  const pose = new PixelCanvas(w, h, 1);
 
-  // Animate legs
-  const leftLegAnim = animateLeg(
+  // Both legs animate symmetrically
+  const leftLegAnim = animateJumpLeg(
     parts[BODY_PARTS.LEFT_LEG],
-    joints.leftHip || joints.hipCenter || { x: 22, y: 27 },
+    joints.leftHip  || joints.hipCenter || { x: 22, y: 27 },
     joints.leftKnee || { x: 22, y: 35 },
-    kf.leftLeg.hipAngle,
-    kf.leftLeg.kneeAngle,
-    kf.leftLeg.lift,
-    kf.bodyBounce
+    kf.hipBend,
+    kf.kneeBend
   );
 
-  const rightLegAnim = animateLeg(
+  const rightLegAnim = animateJumpLeg(
     parts[BODY_PARTS.RIGHT_LEG],
-    joints.rightHip || joints.hipCenter || { x: 26, y: 27 },
+    joints.rightHip  || joints.hipCenter || { x: 26, y: 27 },
     joints.rightKnee || { x: 26, y: 35 },
-    kf.rightLeg.hipAngle,
-    kf.rightLeg.kneeAngle,
-    kf.rightLeg.lift,
-    kf.bodyBounce
+    kf.hipBend,
+    kf.kneeBend
   );
 
-  // Upper body (head + torso) composited as ONE unit before animation.
-  // This prevents head/torso from drifting apart when different translations are applied.
-  // We apply only a vertical translate (bodyBounce) + very slight lean tilt to the combined canvas.
+  // Upper body (head + torso as one unit, tiny lean only)
   const upperBodyCanvas = new PixelCanvas(w, h, 1);
   composite(upperBodyCanvas, parts[BODY_PARTS.TORSO].canvas);
   composite(upperBodyCanvas, parts[BODY_PARTS.HEAD].canvas);
 
-  // Pivot at hipCenter (bottom of torso) for any lean rotation.
-  // torsoLean is very small (≤1°×s) so pixel gaps are negligible.
   const upperBodyAnim = deSpeckle(rotatePartAroundPivot(
     upperBodyCanvas,
     joints.hipCenter ? joints.hipCenter.x : 24,
     joints.hipCenter ? joints.hipCenter.y : 27,
-    kf.torsoLean,
-    0,
-    kf.bodyBounce
+    kf.torsoLean
   ));
 
-  // Arms: rotate around shoulder pivots (forward/back counter-swing).
-  // For a side-facing character, arm rotation = forward or backward lean around shoulder.
-  // rightArm is opposite to rightLeg: forward when hipAngle < 0 (left leg forward).
+  // Arms: both swing together
   const leftArm  = parts[BODY_PARTS.LEFT_ARM];
   const rightArm = parts[BODY_PARTS.RIGHT_ARM];
   const lShoulder = joints.leftShoulder  || joints.shoulderCenter || { x: 22, y: 12 };
   const rShoulder = joints.rightShoulder || joints.shoulderCenter || { x: 26, y: 12 };
 
-  // Left arm swings opposite to left leg (forward when right leg is forward, sinT>0).
   const leftArmAnim = leftArm && leftArm.pixels.length > 0
-    ? deSpeckle(rotatePartAroundPivot(leftArm.canvas, lShoulder.x, lShoulder.y,
-        -kf.armSwingAngle, 0, kf.bodyBounce))
+    ? deSpeckle(rotatePartAroundPivot(leftArm.canvas, lShoulder.x, lShoulder.y, kf.armRaise * 0.9))
     : new PixelCanvas(w, h, 1);
-  // Right arm swings opposite to right leg (forward when left leg is forward, sinT<0).
   const rightArmAnim = rightArm && rightArm.pixels.length > 0
-    ? deSpeckle(rotatePartAroundPivot(rightArm.canvas, rShoulder.x, rShoulder.y,
-        kf.armSwingAngle, 0, kf.bodyBounce))
+    ? deSpeckle(rotatePartAroundPivot(rightArm.canvas, rShoulder.x, rShoulder.y, kf.armRaise))
     : new PixelCanvas(w, h, 1);
 
-  // Composite in painter's order (back to front)
-  // Feet are now baked into their leg segments — no separate feet layer.
-  // Back leg → back arm → upper body (torso+head as one unit) → front arm → front leg
-  if (leftInFront) {
-    composite(frame, rightLegAnim);   // back leg (includes back shoe)
-    composite(frame, rightArmAnim);   // back arm
-    composite(frame, upperBodyAnim);  // torso + head (single unit, no drift)
-    composite(frame, leftArmAnim);    // front arm
-    composite(frame, leftLegAnim);    // front leg (includes front shoe)
-  } else {
-    composite(frame, leftLegAnim);    // back leg (includes back shoe)
-    composite(frame, leftArmAnim);    // back arm
-    composite(frame, upperBodyAnim);  // torso + head (single unit, no drift)
-    composite(frame, rightArmAnim);   // front arm
-    composite(frame, rightLegAnim);   // front leg (includes front shoe)
-  }
+  // Composite pose in back-to-front order
+  composite(pose, rightLegAnim);
+  composite(pose, rightArmAnim);
+  composite(pose, upperBodyAnim);
+  composite(pose, leftArmAnim);
+  composite(pose, leftLegAnim);
 
-  return frame;
+  // 2) Translate the ENTIRE composed pose by bodyLift (whole-frame shift).
+  //    This keeps all parts locked together — no drift.
+  const lift = Math.round(kf.bodyLift);
+  if (lift === 0) return pose;
+  return translatePart(pose, 0, lift);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Ground-lock: shift entire frame so the lowest opaque pixel stays at groundY.
-// Prevents the character from floating up or sinking into the floor.
+// Ground-lock: anchor the character so grounded frames stay at groundY,
+// and airborne frames are allowed to lift off.
+// For jump animation we only ground-lock non-airborne frames.
 // ──────────────────────────────────────────────────────────────────────────────
 
-function groundLock(frame, groundY) {
-  // Find the lowest row containing any opaque pixel
+function groundLock(frame, groundY, isAirborne) {
+  if (isAirborne) return frame; // let airborne frames float naturally
+
+  // Find the lowest opaque row
   let lowestY = -1;
-  outer: for (let y = frame.height - 1; y >= 0; y--) {
+  for (let y = frame.height - 1; y >= 0; y--) {
     for (let x = 0; x < frame.width; x++) {
-      if (frame.getPixel(x, y).a > 0) { lowestY = y; break outer; }
+      if (frame.getPixel(x, y).a > 0) { lowestY = y; break; }
     }
+    if (lowestY >= 0) break;
   }
   if (lowestY < 0) return frame;
 
   const drift = lowestY - groundY;
-  if (Math.abs(drift) < 1) return frame; // within one pixel — acceptable
+  if (Math.abs(drift) < 1) return frame;
 
-  // Shift every row up or down to compensate
   const shifted = new PixelCanvas(frame.width, frame.height, 1);
   for (let y = 0; y < frame.height; y++) {
     const srcY = y + drift;
@@ -868,13 +834,12 @@ function groundLock(frame, groundY) {
 
 function exportDebug(parts, joints, w, h, outputPath) {
   const debugColors = {
-    [BODY_PARTS.HEAD]: { r: 255, g: 100, b: 100 },
-    [BODY_PARTS.TORSO]: { r: 100, g: 255, b: 100 },
-    [BODY_PARTS.LEFT_ARM]: { r: 100, g: 100, b: 255 },
+    [BODY_PARTS.HEAD]:      { r: 255, g: 100, b: 100 },
+    [BODY_PARTS.TORSO]:     { r: 100, g: 255, b: 100 },
+    [BODY_PARTS.LEFT_ARM]:  { r: 100, g: 100, b: 255 },
     [BODY_PARTS.RIGHT_ARM]: { r: 255, g: 255, b: 100 },
-    [BODY_PARTS.LEFT_LEG]: { r: 255, g: 100, b: 255 },
+    [BODY_PARTS.LEFT_LEG]:  { r: 255, g: 100, b: 255 },
     [BODY_PARTS.RIGHT_LEG]: { r: 100, g: 255, b: 255 },
-    [BODY_PARTS.FEET]: { r: 255, g: 200, b: 100 },
   };
 
   const debug = new PixelCanvas(w, h, SCALE);
@@ -886,7 +851,6 @@ function exportDebug(parts, joints, w, h, outputPath) {
     }
   }
 
-  // Mark joints
   for (const [name, j] of Object.entries(joints)) {
     if (j) debug.setPixel(j.x, j.y, 255, 255, 255, 255);
   }
@@ -948,18 +912,67 @@ function exportDebug(parts, joints, w, h, outputPath) {
 
   // Debug export
   if (DEBUG) {
-    const debugPath = path.join(OUTPUT_DIR, path.basename(inputPath, '.png') + '_debug_parts.png');
+    const debugPath = path.join(OUTPUT_DIR, path.basename(inputPath, '.png') + '_debug_parts_jump.png');
     exportDebug(parts, joints, base.width, base.height, debugPath);
   }
 
-  // Step 6: Generate walk cycle frames
-  console.log(`Step 6: Generating ${FRAMES}-frame walk cycle (stride=${STRIDE})...`);
+  // Step 6: Generate jump cycle frames
+  //   We use an EXPANDED canvas so the character has headroom to jump
+  //   without clipping.  Extra padding = jumpHeight above + crouchDip below.
+  const bodyH = maxY - minY + 1;
+  const jumpHeight = Math.round(bodyH * 0.35 * POWER);
+  const padTop    = jumpHeight + 6;  // headroom for the arc peak
+  const padBottom = Math.round(Math.max(3, bodyH * 0.10 * POWER)) + 4; // room for deep crouch dip
+  const expandedH = base.height + padTop + padBottom;
+  const expandedW = base.width;
+
+  console.log(`Step 6: Generating ${FRAMES}-frame jump cycle (power=${POWER})...`);
+  console.log(`  Canvas expanded: ${base.width}×${base.height} → ${expandedW}×${expandedH} (+${padTop}top +${padBottom}bot)`);
+
+  // Re-build parts, joints on the expanded canvas (shift everything down by padTop)
+  const expandedBase = new PixelCanvas(expandedW, expandedH, 1);
+  for (let y = 0; y < base.height; y++)
+    for (let x = 0; x < base.width; x++) {
+      const px = base.getPixel(x, y);
+      if (px.a > 0) expandedBase.setPixel(x, y + padTop, px.r, px.g, px.b, px.a);
+    }
+
+  // Shift part canvases + pixel lists
+  const shiftedParts = {};
+  for (const [name, part] of Object.entries(parts)) {
+    const sc = new PixelCanvas(expandedW, expandedH, 1);
+    const px = [];
+    for (const p of part.pixels) {
+      const c = part.canvas.getPixel(p.x, p.y);
+      if (c.a > 0) {
+        sc.setPixel(p.x, p.y + padTop, c.r, c.g, c.b, c.a);
+        px.push({ x: p.x, y: p.y + padTop });
+      }
+    }
+    shiftedParts[name] = {
+      canvas: sc, pixels: px,
+      minX: part.minX, maxX: part.maxX,
+      minY: part.minY + padTop, maxY: part.maxY + padTop,
+      centroidX: part.centroidX, centroidY: part.centroidY + padTop,
+    };
+  }
+
+  // Shift joints
+  const shiftedJoints = {};
+  for (const [name, j] of Object.entries(joints)) {
+    if (j) shiftedJoints[name] = { x: j.x, y: j.y + padTop };
+  }
+
+  const expandedGroundY = maxY + padTop;
+
   const frames = [];
   for (let i = 0; i < FRAMES; i++) {
     const t = i / FRAMES;
-    let frame = buildFrame(base, parts, joints, t, STRIDE);
-    // Ground-lock: keep the lowest foot pixel anchored to the original floor line
-    frame = groundLock(frame, maxY);
+    let frame = buildFrame(expandedBase, shiftedParts, shiftedJoints, t, POWER, bodyH);
+
+    // Ground-lock grounded frames; let airborne frames float.
+    const isAirborne = (t >= 0.3 && t < 0.72);
+    frame = groundLock(frame, expandedGroundY, isAirborne);
     frames.push(frame);
   }
 
@@ -975,14 +988,14 @@ function exportDebug(parts, joints, w, h, outputPath) {
   });
 
   // Build spritesheet
-  const baseName = path.basename(inputPath, '.png') + '_walk_v3';
-  const clip = AnimationSystem.createClip('walk', {
+  const baseName = path.basename(inputPath, '.png') + '_jump';
+  const clip = AnimationSystem.createClip('jump', {
     frames: frames.map((_, i) => i),
-    fps: 8,
+    fps: 10,
   });
 
   const { canvas: sheet, metadata } = SpriteSheetGenerator.pack(scaled, {
-    prefix: 'walk',
+    prefix: 'jump',
     imageName: `${baseName}.png`,
     animations: [clip],
     columns: scaled.length,  // single horizontal row

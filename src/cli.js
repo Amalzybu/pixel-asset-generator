@@ -5,6 +5,7 @@ const path = require('path');
 const AssetGenerator = require('./AssetGenerator');
 const ExportService = require('./export/ExportService');
 const ImagePixelizer = require('./generation/ImagePixelizer');
+const StyleAnalyzer = require('./generation/StyleAnalyzer');
 
 function parseArgs(argv) {
   const args = {};
@@ -144,6 +145,24 @@ async function main() {
       });
       break;
     }
+    case 'analyze': {
+      // --images "path1,path2,..." --name myStyle --output ./output
+      if (!args.images) {
+        console.error('Error: --images (comma-separated paths) is required for analyze type');
+        process.exit(1);
+      }
+      const imgPaths = args.images.split(',').map(p => p.trim());
+      const presetName = args.name || `style_${Date.now()}`;
+      const targetDensity = parseInt(args.pixelDensity) || undefined;
+      const { preset, palette } = await StyleAnalyzer.analyze(imgPaths, {
+        name: presetName,
+        targetPixelDensity: targetDensity,
+      });
+      const presetPath = StyleAnalyzer.savePreset(outputDir, preset, palette);
+      console.log(`\nPreset saved to: ${presetPath}`);
+      console.log('Use it with: --type photo --preset ' + presetPath + ' --image <your_image>');
+      return;
+    }
     case 'photo': {
       if (!args.image) {
         console.error('Error: --image path is required for photo type');
@@ -155,24 +174,35 @@ async function main() {
         process.exit(1);
       }
 
+      // Load preset file if provided
+      let presetOverrides = {};
+      let customPalette = null;
+      if (args.preset && fs.existsSync(args.preset)) {
+        const loaded = StyleAnalyzer.loadPreset(args.preset);
+        presetOverrides = loaded.preset;
+        customPalette = loaded.palette;
+        console.log(`Using preset: ${loaded.preset._name || args.preset}`);
+      }
+
       result = await AssetGenerator.generateFromPhoto({
         imagePath: args.image,
-        pixelDensity: parseInt(args.pixelDensity) || 32,
-        palette: args.palette || 'AUTO',
+        pixelDensity: parseInt(args.pixelDensity) || presetOverrides.pixelDensity || 32,
+        palette: args.palette || presetOverrides.palette || 'AUTO',
+        customPalette,
         style: args.style || 'cartoon',
-        enableEdgeDetection: args.edges !== 'false',
-        edgeThreshold: parseInt(args.edgeThreshold) || 30,
-        contrastBoost: parseFloat(args.contrast) || 1.2,
-        posterization: parseInt(args.posterize) || 4,
-        enableOutlines: args.outlines !== 'false',
-        outlineColor: args.outlineColor || 'black',
-        outlineThickness: parseInt(args.outlineThickness) || 1,
-        saturation: parseFloat(args.saturation) || 1.0,
-        preBlur: args.preBlur !== undefined ? parseFloat(args.preBlur) : 0.6,
+        enableEdgeDetection: args.edges !== undefined ? args.edges !== 'false' : presetOverrides.enableEdgeDetection,
+        edgeThreshold: parseInt(args.edgeThreshold) || presetOverrides.edgeThreshold || 30,
+        contrastBoost: parseFloat(args.contrast) || presetOverrides.contrastBoost || 1.2,
+        posterization: parseInt(args.posterize) || presetOverrides.posterization || 4,
+        enableOutlines: args.outlines !== undefined ? args.outlines !== 'false' : presetOverrides.enableOutlines,
+        outlineColor: args.outlineColor || presetOverrides.outlineColor || 'black',
+        outlineThickness: parseInt(args.outlineThickness) || presetOverrides.outlineThickness || 1,
+        saturation: parseFloat(args.saturation) || presetOverrides.saturation || 1.0,
+        preBlur: args.preBlur !== undefined ? parseFloat(args.preBlur) : (presetOverrides.preBlur !== undefined ? presetOverrides.preBlur : 0.6),
         medianFilter: args.noMedian !== true,
         cleanIsolated: args.noClean !== true,
-        maxColors: parseInt(args.maxColors) || 16,
-        smoothing: parseInt(args.smooth) || 0,
+        maxColors: parseInt(args.maxColors) || presetOverrides.maxColors || 16,
+        smoothing: parseInt(args.smooth) || presetOverrides.smoothing || 0,
         upscale: parseInt(args.upscale) || 1,
       });
       break;

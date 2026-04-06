@@ -49,9 +49,11 @@ ipcMain.handle('run-command', (event, { script, args }) => {
     }
 
     const scriptPath = path.join(APP_PATH, script);
-    const child = spawn('node', [scriptPath, ...args], {
+    // Use Electron's own binary in Node mode — native modules (canvas, sharp)
+    // no longer require canvas.node so this works in both dev and packaged builds.
+    const child = spawn(process.execPath, [scriptPath, ...args], {
       cwd: APP_PATH,
-      env: { ...process.env },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       shell: false,
     });
 
@@ -101,6 +103,19 @@ ipcMain.handle('pick-file', async (event, { filters, defaultPath } = {}) => {
   return result.filePaths[0];
 });
 
+// ── Multi-file picker ──
+ipcMain.handle('pick-files', async (event, { filters, defaultPath } = {}) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: filters || [
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+    ],
+    defaultPath: defaultPath || APP_PATH,
+  });
+  if (result.canceled) return [];
+  return result.filePaths;
+});
+
 // ── Directory picker ──
 ipcMain.handle('pick-dir', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -125,7 +140,7 @@ ipcMain.handle('list-output-files', (event, { dir, since }) => {
       const fullPath = path.join(d, entry.name);
       if (entry.isDirectory()) {
         scan(fullPath);
-      } else if (/\.(png|gif|jpg|jpeg)$/i.test(entry.name)) {
+      } else if (/\.(png|gif|jpg|jpeg|preset\.json)$/i.test(entry.name)) {
         const stat = fs.statSync(fullPath);
         if (!since || stat.mtimeMs >= since) {
           results.push({
@@ -160,3 +175,14 @@ ipcMain.handle('open-path', (event, filePath) => {
 
 // ── Get the project root path ──
 ipcMain.handle('get-app-path', () => APP_PATH);
+
+// ── Read a preset JSON file and return its data ──
+ipcMain.handle('read-preset', (event, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return raw;
+  } catch {
+    return null;
+  }
+});

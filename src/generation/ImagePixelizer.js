@@ -41,7 +41,7 @@ class ImagePixelizer {
    * @param {Object} config - Configuration overrides
    * @returns {Promise<PixelCanvas>} Pixelized image as PixelCanvas
    */
-  static async fromFile(imagePath, config = {}) {
+  static async fromFile(imagePath, config = {}, customPalette = null) {
     const mergedConfig = { ...ImagePixelizer.DEFAULT_CONFIG, ...config };
 
     try {
@@ -121,7 +121,12 @@ class ImagePixelizer {
       }
 
       // Step 6: Quantize to palette
-      const palette = ImagePixelizer._getPalette(mergedConfig.palette, mergedConfig.maxColors);
+      let palette;
+      if (mergedConfig.palette === 'CUSTOM' && customPalette && customPalette.length > 0) {
+        palette = customPalette;
+      } else {
+        palette = ImagePixelizer._getPalette(mergedConfig.palette, mergedConfig.maxColors);
+      }
       pixels = ImagePixelizer._quantizeColors(pixels, palette, channels);
 
       // Step 7: Median filter — removes salt-and-pepper / scattered pixels
@@ -413,6 +418,11 @@ class ImagePixelizer {
       return generatedPalette.colors;
     }
 
+    // CUSTOM palette passed directly (from StyleAnalyzer presets)
+    if (paletteType === 'CUSTOM') {
+      return null; // caller must supply palette via customPalette param
+    }
+
     try {
       const palette = paletteManager.get(paletteId);
       if (palette && palette.colors) {
@@ -652,6 +662,23 @@ class ImagePixelizer {
         enableOutlines: false,
         palette: 'AUTO',
         smoothing: 0
+      },
+      handDrawn: {
+        pixelDensity: 48,
+        preBlur: 1.0,
+        enableEdgeDetection: true,
+        edgeThreshold: 35,
+        contrastBoost: 1.4,
+        saturation: 1.5,
+        posterization: 4,
+        enableOutlines: true,
+        outlineColor: 'black',
+        outlineThickness: 2,
+        palette: 'CUSTOM',
+        maxColors: 24,
+        medianFilter: true,
+        cleanIsolated: true,
+        smoothing: 1
       }
     };
   }

@@ -23,6 +23,8 @@
   <div id="tabs">
     <button class="tab-btn active" data-tab="photo">📷 Photo → Pixel</button>
     <button class="tab-btn" data-tab="walk">🚶 Walk Generator</button>
+    <button class="tab-btn" data-tab="jump">🦘 Jump Generator</button>
+    <button class="tab-btn" data-tab="style">🎨 Style Analyzer</button>
   </div>
 
   <!-- Content -->
@@ -54,10 +56,20 @@
                 <div class="input-wrap">
                   <select id="photo-style">
                     <option value="cartoon" selected>cartoon</option>
+                    <option value="handDrawn">handDrawn</option>
                     <option value="highRes">highRes</option>
                     <option value="lowRes">lowRes</option>
                     <option value="minimal">minimal</option>
+                    <option value="custom">Custom Preset…</option>
                   </select>
+                </div>
+              </div>
+              <div class="field-row" id="photo-preset-row" style="display:none">
+                <label>Preset File</label>
+                <div class="input-wrap" style="display:flex;gap:6px">
+                  <input type="text" id="photo-preset-path" readonly placeholder="Select .preset.json" style="flex:1">
+                  <button class="btn-secondary btn" style="flex:0 0 auto;padding:5px 10px;font-size:11px"
+                    id="photo-pick-preset">📁</button>
                 </div>
               </div>
               <div class="field-row">
@@ -128,6 +140,12 @@
               <div class="toggle-row">
                 <label>Outlines</label>
                 <input type="checkbox" id="photo-outlines" checked>
+              </div>
+            </div>
+            <div class="fields-2col" style="margin-top:8px">
+              <div class="field-col">
+                <label>Outline Thickness</label>
+                <input type="number" id="photo-outlineThickness" value="1" min="1" max="4">
               </div>
             </div>
           </div>
@@ -228,6 +246,10 @@
                 <label>Debug Visuals</label>
                 <input type="checkbox" id="walk-debug">
               </div>
+              <div class="toggle-row">
+                <label>Export Aseprite (.aseprite)</label>
+                <input type="checkbox" id="walk-aseprite">
+              </div>
             </div>
           </div>
 
@@ -277,6 +299,198 @@
                 <button class="btn-clear" id="walk-clear-log">Clear</button>
               </div>
               <div class="console-log" id="walk-log"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════════ JUMP GENERATOR TAB ══════════════ -->
+    <div class="tab-panel" id="panel-jump">
+      <div class="split">
+
+        <!-- LEFT: Controls -->
+        <div class="panel-left">
+
+          <div class="section">
+            <div class="section-title">Input Sprite</div>
+            <div class="image-drop" id="jump-drop">
+              <div class="placeholder">
+                <span class="icon">🧍</span>
+                Click to select sprite PNG
+              </div>
+            </div>
+            <div class="image-path" id="jump-path"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Animation Settings</div>
+            <div class="fields-2col">
+              <div class="field-col">
+                <label>Frames</label>
+                <input type="number" id="jump-frames" value="8" min="2" max="32">
+              </div>
+              <div class="field-col">
+                <label>Scale</label>
+                <input type="number" id="jump-scale" value="6" min="1" max="16">
+              </div>
+              <div class="field-col">
+                <label>Power (0–1)</label>
+                <input type="number" id="jump-power" value="0.8" min="0" max="1" step="0.05">
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Options</div>
+            <div class="field-group">
+              <div class="toggle-row">
+                <label>Debug Visuals</label>
+                <input type="checkbox" id="jump-debug">
+              </div>
+              <div class="toggle-row">
+                <label>Export Aseprite (.aseprite)</label>
+                <input type="checkbox" id="jump-aseprite">
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Output</div>
+            <div class="field-group">
+              <div class="field-row">
+                <label>Output Dir</label>
+                <div class="input-wrap" style="display:flex;gap:6px">
+                  <input type="text" id="jump-output" value="output" style="flex:1">
+                  <button class="btn-secondary btn" style="flex:0 0 auto;padding:5px 10px;font-size:11px"
+                    id="jump-pick-output">📁</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-primary" id="jump-run">
+              <span class="btn-label">▶ Run</span>
+            </button>
+            <button class="btn btn-danger" id="jump-stop" disabled>■ Stop</button>
+            <button class="btn btn-secondary" id="jump-refresh" title="Refresh output">↺</button>
+          </div>
+        </div>
+
+        <!-- RIGHT: Output -->
+        <div class="panel-right">
+          <div class="output-header">
+            <span>Output Images</span>
+            <span class="badge" id="jump-count">0</span>
+            <div class="ml-auto" style="display:flex;gap:6px">
+              <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px"
+                id="jump-open-folder">Open Folder</button>
+            </div>
+          </div>
+          <div class="output-body">
+            <div class="gallery-wrap" id="jump-gallery">
+              <div class="gallery-empty">
+                <span class="icon">🎬</span>
+                Run the jump generator to see animation frames
+              </div>
+            </div>
+            <div class="console-wrap">
+              <div class="console-header">
+                <span>Console</span>
+                <button class="btn-clear" id="jump-clear-log">Clear</button>
+              </div>
+              <div class="console-log" id="jump-log"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ══════════════ STYLE ANALYZER TAB ══════════════ -->
+    <div class="tab-panel" id="panel-style">
+      <div class="split">
+
+        <!-- LEFT: Controls -->
+        <div class="panel-left">
+
+          <div class="section">
+            <div class="section-title">Reference Images</div>
+            <p style="font-size:12px;color:#999;margin:0 0 8px">Select 5–20 images with a similar art style. The analyzer will extract colors, contrast, edge density, and saturation to build a custom preset.</p>
+            <div class="field-group">
+              <div class="field-row">
+                <button class="btn btn-secondary" id="style-pick-images" style="width:100%">📁 Select Reference Images…</button>
+              </div>
+            </div>
+            <div id="style-image-list" style="font-size:11px;color:#aaa;margin-top:6px;max-height:120px;overflow-y:auto"></div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Preset Name</div>
+            <div class="field-group">
+              <div class="field-row">
+                <input type="text" id="style-name" value="my_style" placeholder="e.g. ghibli_pastel">
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Options</div>
+            <div class="fields-2col">
+              <div class="field-col">
+                <label>Pixel Density</label>
+                <input type="number" id="style-pixelDensity" value="64" min="8" max="256">
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Output</div>
+            <div class="field-group">
+              <div class="field-row">
+                <label>Output Dir</label>
+                <div class="input-wrap" style="display:flex;gap:6px">
+                  <input type="text" id="style-output" value="output" style="flex:1">
+                  <button class="btn-secondary btn" style="flex:0 0 auto;padding:5px 10px;font-size:11px"
+                    id="style-pick-output">📁</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn btn-primary" id="style-run">
+              <span class="btn-label">🔬 Analyze</span>
+            </button>
+            <button class="btn btn-danger" id="style-stop" disabled>■ Stop</button>
+          </div>
+        </div>
+
+        <!-- RIGHT: Output -->
+        <div class="panel-right">
+          <div class="output-header">
+            <span>Saved Presets</span>
+            <span class="badge" id="style-count">0</span>
+            <div class="ml-auto" style="display:flex;gap:6px">
+              <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px"
+                id="style-open-folder">Open Folder</button>
+            </div>
+          </div>
+          <div class="output-body">
+            <div class="gallery-wrap" id="style-presets">
+              <div class="gallery-empty">
+                <span class="icon">🎨</span>
+                Analyze reference images to create a custom preset
+              </div>
+            </div>
+            <div class="console-wrap">
+              <div class="console-header">
+                <span>Console</span>
+                <button class="btn-clear" id="style-clear-log">Clear</button>
+              </div>
+              <div class="console-log" id="style-log"></div>
             </div>
           </div>
         </div>

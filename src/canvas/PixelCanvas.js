@@ -1,4 +1,3 @@
-const { createCanvas } = require('canvas');
 const { PNG } = require('pngjs');
 
 class PixelCanvas {

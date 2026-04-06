@@ -1220,3 +1220,9 @@ node src/cli.js --type photo --image "C:\Users\Amal\Pictures\Untitled.png" --sty
 
 **walking generator 🎨✨**
 node generate_walk_v3.js output/heroTest.png --frames 8 --scale 6
+
+# Step 1: Analyze reference images
+node src/cli.js --type analyze --images "img1.png,img2.png,img3.png" --name ghibli_style
+
+# Step 2: Use the preset
+node src/cli.js --type photo --image myphoto.jpg --preset output/ghibli_style.preset.json --upscale 5

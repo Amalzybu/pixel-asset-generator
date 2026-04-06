@@ -166,11 +166,17 @@ document.getElementById('photo-run').addEventListener('click', async () => {
     '--posterize', document.getElementById('photo-posterize').value,
     '--edges', document.getElementById('photo-edges').checked ? 'true' : 'false',
     '--outlines', document.getElementById('photo-outlines').checked ? 'true' : 'false',
+    '--outlineThickness', document.getElementById('photo-outlineThickness').value,
     '--edgeThreshold', document.getElementById('photo-edgeThreshold').value,
     '--preBlur', document.getElementById('photo-preBlur').value,
     '--upscale', document.getElementById('photo-upscale').value,
     '--output', document.getElementById('photo-output').value || 'output',
   ];
+
+  // If "Custom Preset" is selected and a preset path is set, add --preset
+  if (document.getElementById('photo-style').value === 'custom' && photoPresetPath) {
+    args.push('--preset', photoPresetPath);
+  }
 
   setRunning('photo', true);
   window.api.removeCommandListeners();
@@ -268,6 +274,9 @@ document.getElementById('walk-run').addEventListener('click', async () => {
   if (document.getElementById('walk-debug').checked) {
     args.push('--debug');
   }
+  if (document.getElementById('walk-aseprite').checked) {
+    args.push('--aseprite');
+  }
 
   setRunning('walk', true);
   window.api.removeCommandListeners();
@@ -291,3 +300,261 @@ document.getElementById('walk-run').addEventListener('click', async () => {
 
   await window.api.runCommand({ script: 'generate_walk_v3.js', args });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// JUMP GENERATOR
+// ══════════════════════════════════════════════════════════════════════════
+let jumpImagePath = null;
+
+const jumpDrop    = document.getElementById('jump-drop');
+const jumpPathEl  = document.getElementById('jump-path');
+const jumpLog     = document.getElementById('jump-log');
+const jumpGallery = document.getElementById('jump-gallery');
+const jumpCount   = document.getElementById('jump-count');
+
+async function jumpPickImage() {
+  const p = await window.api.pickFile({
+    filters: [{ name: 'PNG Images', extensions: ['png'] }],
+  });
+  if (!p) return;
+  jumpImagePath = p;
+  jumpPathEl.textContent = p;
+
+  const dataUrl = await window.api.readFileBase64(p);
+  jumpDrop.innerHTML = '';
+  if (dataUrl) {
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    jumpDrop.appendChild(img);
+  }
+}
+
+jumpDrop.addEventListener('click', jumpPickImage);
+
+document.getElementById('jump-pick-output').addEventListener('click', async () => {
+  const d = await window.api.pickDir();
+  if (d) document.getElementById('jump-output').value = d;
+});
+
+document.getElementById('jump-clear-log').addEventListener('click', () => { jumpLog.innerHTML = ''; });
+
+document.getElementById('jump-open-folder').addEventListener('click', async () => {
+  const appPath = await window.api.getAppPath();
+  const outDir = document.getElementById('jump-output').value || 'output';
+  const resolved = outDir.startsWith('.') ? `${appPath}/${outDir.replace(/^\.\//,  '')}` : outDir;
+  await window.api.openPath(resolved);
+});
+
+document.getElementById('jump-refresh').addEventListener('click', async () => {
+  const outDir = document.getElementById('jump-output').value || 'output';
+  await showGallery(jumpGallery, jumpCount, outDir, null);
+});
+
+document.getElementById('jump-stop').addEventListener('click', async () => {
+  await window.api.killCommand();
+});
+
+document.getElementById('jump-run').addEventListener('click', async () => {
+  if (!jumpImagePath) {
+    appendLog(jumpLog, '⚠ Please select an input sprite PNG first.', 'error');
+    return;
+  }
+
+  jumpLog.innerHTML = '';
+  const runStart = Date.now();
+
+  const args = [
+    jumpImagePath,
+    '--frames', document.getElementById('jump-frames').value,
+    '--scale',  document.getElementById('jump-scale').value,
+    '--power',  document.getElementById('jump-power').value,
+    '--output', document.getElementById('jump-output').value || 'output',
+  ];
+
+  if (document.getElementById('jump-debug').checked) {
+    args.push('--debug');
+  }
+  if (document.getElementById('jump-aseprite').checked) {
+    args.push('--aseprite');
+  }
+
+  setRunning('jump', true);
+  window.api.removeCommandListeners();
+
+  window.api.onCommandOutput((data) => {
+    appendLog(jumpLog, data.text.trimEnd(), data.type);
+  });
+
+  window.api.onCommandDone(async (data) => {
+    setRunning('jump', false);
+    window.api.removeCommandListeners();
+
+    if (data.code === 0) {
+      appendLog(jumpLog, `\n✓ Done! Scanning output…`, 'success');
+      const outDir = document.getElementById('jump-output').value || 'output';
+      await showGallery(jumpGallery, jumpCount, outDir, runStart);
+    } else {
+      appendLog(jumpLog, `\n✗ Process exited with code ${data.code}`, 'error');
+    }
+  });
+
+  await window.api.runCommand({ script: 'generate_jump_sprite.js', args });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// PHOTO TAB — Custom Preset picker
+// ══════════════════════════════════════════════════════════════════════════
+const photoStyleSelect = document.getElementById('photo-style');
+const presetRow = document.getElementById('photo-preset-row');
+let photoPresetPath = null;
+
+photoStyleSelect.addEventListener('change', () => {
+  presetRow.style.display = photoStyleSelect.value === 'custom' ? '' : 'none';
+});
+
+async function applyPresetToUI(presetPath) {
+  photoPresetPath = presetPath;
+  document.getElementById('photo-preset-path').value = presetPath;
+  // Populate outlineThickness field from preset so user can see and override it
+  const data = await window.api.readPreset(presetPath);
+  if (data && data.preset) {
+    const t = data.preset.outlineThickness;
+    if (t != null) document.getElementById('photo-outlineThickness').value = t;
+  }
+}
+
+document.getElementById('photo-pick-preset').addEventListener('click', async () => {
+  const p = await window.api.pickFile({
+    filters: [{ name: 'Preset Files', extensions: ['json'] }],
+  });
+  if (!p) return;
+  await applyPresetToUI(p);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// STYLE ANALYZER
+// ══════════════════════════════════════════════════════════════════════════
+let styleImagePaths = [];
+
+const styleLog     = document.getElementById('style-log');
+const stylePresets = document.getElementById('style-presets');
+const styleCount   = document.getElementById('style-count');
+const styleImgList = document.getElementById('style-image-list');
+
+document.getElementById('style-pick-images').addEventListener('click', async () => {
+  const files = await window.api.pickFiles({
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+  });
+  if (!files || files.length === 0) return;
+  styleImagePaths = files;
+  styleImgList.innerHTML = files.map((f, i) => `<div>${i + 1}. ${f.split(/[\\/]/).pop()}</div>`).join('');
+});
+
+document.getElementById('style-pick-output').addEventListener('click', async () => {
+  const d = await window.api.pickDir();
+  if (d) document.getElementById('style-output').value = d;
+});
+
+document.getElementById('style-clear-log').addEventListener('click', () => { styleLog.innerHTML = ''; });
+
+document.getElementById('style-open-folder').addEventListener('click', async () => {
+  const appPath = await window.api.getAppPath();
+  const outDir = document.getElementById('style-output').value || 'output';
+  const resolved = outDir.startsWith('.') ? `${appPath}/${outDir.replace(/^\.\//, '')}` : outDir;
+  await window.api.openPath(resolved);
+});
+
+document.getElementById('style-stop').addEventListener('click', async () => {
+  await window.api.killCommand();
+});
+
+document.getElementById('style-run').addEventListener('click', async () => {
+  if (styleImagePaths.length === 0) {
+    appendLog(styleLog, '⚠ Please select reference images first.', 'error');
+    return;
+  }
+
+  styleLog.innerHTML = '';
+
+  const name = document.getElementById('style-name').value || 'my_style';
+  const pixelDensity = document.getElementById('style-pixelDensity').value || '64';
+  const outDir = document.getElementById('style-output').value || 'output';
+
+  const args = [
+    '--type', 'analyze',
+    '--images', styleImagePaths.join(','),
+    '--name', name,
+    '--pixelDensity', pixelDensity,
+    '--output', outDir,
+  ];
+
+  setRunning('style', true);
+  window.api.removeCommandListeners();
+
+  window.api.onCommandOutput((data) => {
+    appendLog(styleLog, data.text.trimEnd(), data.type);
+  });
+
+  window.api.onCommandDone(async (data) => {
+    setRunning('style', false);
+    window.api.removeCommandListeners();
+
+    if (data.code === 0) {
+      appendLog(styleLog, `\n✓ Preset saved! You can now use it in the Photo → Pixel tab.`, 'success');
+      await refreshPresetList();
+    } else {
+      appendLog(styleLog, `\n✗ Process exited with code ${data.code}`, 'error');
+    }
+  });
+
+  await window.api.runCommand({ script: 'src/cli.js', args });
+});
+
+async function refreshPresetList() {
+  const appPath = await window.api.getAppPath();
+  const outDir = document.getElementById('style-output').value || 'output';
+  const files = await window.api.listOutputFiles({ dir: outDir, since: null });
+  const presets = files.filter(f => f.name.endsWith('.preset.json'));
+  styleCount.textContent = presets.length;
+
+  if (presets.length === 0) return;
+
+  const grid = document.createElement('div');
+  grid.className = 'gallery-grid';
+
+  for (const preset of presets) {
+    const item = document.createElement('div');
+    item.className = 'gallery-item';
+    item.title = preset.relPath;
+    item.style.cursor = 'pointer';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'item-name';
+    nameEl.textContent = preset.name.replace('.preset.json', '');
+    nameEl.style.padding = '12px 6px';
+    nameEl.style.textAlign = 'center';
+
+    const icon = document.createElement('div');
+    icon.textContent = '🎨';
+    icon.style.fontSize = '32px';
+    icon.style.textAlign = 'center';
+    icon.style.padding = '12px 0 4px';
+
+    item.appendChild(icon);
+    item.appendChild(nameEl);
+
+    item.addEventListener('click', async () => {
+      // Auto-select in Photo tab and populate outline thickness from preset
+      await applyPresetToUI(preset.path);
+      photoStyleSelect.value = 'custom';
+      presetRow.style.display = '';
+      appendLog(styleLog, `Selected "${preset.name}" — switch to Photo → Pixel tab to use it.`, 'stdout');
+    });
+
+    grid.appendChild(item);
+  }
+
+  stylePresets.innerHTML = '';
+  stylePresets.appendChild(grid);
+}
+
